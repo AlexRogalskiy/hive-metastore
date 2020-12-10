@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-metastore-info
+  labels:
+    # see https://docs.staroid.com/project/dependency.html
+    dependency.staroid.com/export: hive-metastore-info
+data:
+  HIVE_METASTORE_NAMESPACE: "{{.Namespace}}"
+  HIVE_METASTORE_SERVICE: hive-metastore-service
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-metastore-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-metastore
+  template:
+    metadata:
+      labels:
+        app: hive-metastore
+    spec:
+      initContainers:
+      - name: db-schema-init
+        image: hive
+        command: ["sh", "-c", "/initscript/init-schema.sh"]
+        volumeMounts:
+        - name: init-db-volume
+          mountPath: /initscript
+      containers:
+      - name: hive-metastore
+        image: hive
+        command: ["bin/hive"]
+        args: ["--service", "metastore"]
+      volumes:
+      - name: init-db-volume
+        secret:
+          secretName: init-db
+          defaultMode: 0755
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: hive-metastore-service
+spec:
+  ports:
+  - name: thrift
+    port: 9083
+  selector:
+    app: hive-metastore
+---
+kind: Secret
+apiVersion: v1
+metadata:
+  name: init-db
+stringData:
+  init-schema.sh: |
+    #!/bin/bash
+    HIVE_USER=hive
+    DB_HOST=postgres-service
+    
+    COUNT=180
+    while [ $COUNT -gt 0 ]; do
+      PGPASSWORD=hive psql -h $DB_HOST -U $HIVE_USER -d hive -c "\dt" > /dev/null
+      if [ $? -eq 0 ]; then
+        break
+      fi
+
+      sleep 3
+      let "COUNT-=1"
+    done
+    if [ $COUNT -eq 0 ]; then
+      echo "db connection failed"
+      exit 1
+    fi
+
+    PGPASSWORD=hive psql -h $DB_HOST -U $HIVE_USER -d hive -c "\dt" | grep ROLES > /dev/null
+    if [ $? -ne 0 ]; then
+      $HIVE_HOME/bin/schematool -initSchema -dbType postgres
+    fi

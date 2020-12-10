@@ -1,0 +1,5 @@
+apiVersion: beta/v1
+build:
+  skaffold: {}
+deploy:
+  implements: open-datastudio/hive-metastore
